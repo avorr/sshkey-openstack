@@ -1,0 +1,47 @@
+---
+- hosts: all
+  become: True
+  become_user: root
+
+  tasks:
+  - name: Change AuthorizedKeysFile in sshd_config
+    lineinfile:
+      path: /etc/ssh/sshd_config
+      regexp: 'AuthorizedKeysFile'
+      line: 'AuthorizedKeysFile .ssh/authorized_keys'
+      state: present
+    notify:
+      - restart sshd
+
+  - name: lookup localuser
+    become: false
+    local_action: command whoami
+    register: local_user
+
+  - name: find pub keys
+    delegate_to: localhost
+    become_user: "{{ local_user.stdout }}"
+    find:
+      paths: "{{ playbook_dir+'/keys' }}"
+      file_type: "file"
+    register: find_result
+
+  - name: find path to key
+    set_fact:
+      key_path: "{{ key_path|default({}) | combine( {item.path:item.path} ) }}"
+    loop: "{{ find_result.files }}"
+
+  - name: add ssh pub key
+    authorized_key:
+      user: "{{ ansible_user }}"
+      key: "{{ lookup('file', '{{ item }}') }}"
+      state: present
+      exclusive: False
+    loop: "{{ key_path.values() | list }}"
+
+  handlers:
+  - name: restart sshd
+    service:
+      name: sshd
+      state: restarted
+      enabled: yes
